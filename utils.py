@@ -1,0 +1,196 @@
+import numpy as np
+import random
+import scanpy as sc
+import sys
+import datetime
+import warnings
+from collections import Counter
+from dateutil.parser import parse as dparse
+from Bio import BiopythonWarning
+warnings.simplefilter('ignore', BiopythonWarning)
+from Bio import SeqIO
+
+np.random.seed(1)
+random.seed(1)
+np.set_printoptions(threshold=10000)
+
+AAs = [
+    'A', 'R', 'N', 'D', 'C', 'Q', 'E', 'G', 'H',
+    'I', 'L', 'K', 'M', 'F', 'P', 'S', 'T', 'W',
+    'Y', 'V', 'X', 'Z', 'J', 'U', 'B',
+]
+
+def tprint(string):
+    string = str(string)
+    sys.stdout.write(str(datetime.datetime.now()) + ' | ')
+    sys.stdout.write(string + '\n')
+    sys.stdout.flush()
+
+def parse_args():
+    import argparse
+    parser = argparse.ArgumentParser(description='Coronavirus sequence analysis')
+
+    parser.add_argument('--n-epochs', type=int, default=4,
+                        help='Number of training epochs')
+    parser.add_argument('--seed', type=int, default=1,
+                        help='Random seed')
+    parser.add_argument('--train', action='store_true',
+                        help='Train model')
+    parser.add_argument('--test', action='store_true',
+                        help='Test model')
+
+    args = parser.parse_args()
+    return args
+
+def parse_viprbrc(entry):
+    fields = entry.split('|')
+    if fields[7] == 'NA':
+        date = None
+    else:
+        date = fields[7].split('/')[0]
+        date = dparse(date.replace('_', '-'))
+
+    country = fields[9]
+    from locations import country2continent
+    if country in country2continent:
+        continent = country2continent[country]
+    else:
+        country = 'NA'
+        continent = 'NA'
+
+    from mammals import species2group
+
+    meta = {
+        'strain': fields[5],
+        'host': fields[8],
+        'group': species2group[fields[8]],
+        'country': country,
+        'continent': continent,
+        'dataset': 'viprbrc',
+    }
+    return meta
+
+def parse_nih(entry):
+    fields = entry.split('|')
+
+    country = fields[3]
+    from locations import country2continent
+    if country in country2continent:
+        continent = country2continent[country]
+    else:
+        country = 'NA'
+        continent = 'NA'
+
+    meta = {
+        'strain': 'SARS-CoV-2',
+        'host': 'human',
+        'group': 'human',
+        'country': country,
+        'continent': continent,
+        'dataset': 'nih',
+    }
+    return meta
+
+def parse_gisaid(entry):
+    fields = entry.split('|')
+
+    type_id = fields[1].split('/')[1]
+
+    if type_id in { 'bat', 'canine', 'cat', 'env', 'mink',
+                    'pangolin', 'tiger' }:
+        host = type_id
+        country = 'NA'
+        continent = 'NA'
+    else:
+        host = 'human'
+        from locations import country2continent
+        if type_id in country2continent:
+            country = type_id
+            continent = country2continent[country]
+        else:
+            country = 'NA'
+            continent = 'NA'
+
+    from mammals import species2group
+
+    meta = {
+        'strain': fields[1],
+        'host': host,
+        'group': species2group[host].lower(),
+        'country': country,
+        'continent': continent,
+        'dataset': 'gisaid',
+    }
+    return meta
+
+def process(fnames):
+    seqs = {}
+    for fname in fnames:
+        for record in SeqIO.parse(fname, 'fasta'):
+            if len(record.seq) < 1000:
+                continue
+            if str(record.seq).count('X') > 0:
+                continue
+            if record.seq not in seqs:
+                seqs[record.seq] = []
+            if fname == 'data/cov/viprbrc_db.fasta':
+                meta = parse_viprbrc(record.description)
+            elif fname == 'data/cov/gisaid.fasta':
+                meta = parse_gisaid(record.description)
+            else:
+                meta = parse_nih(record.description)
+            meta['accession'] = record.description
+            seqs[record.seq].append(meta)
+
+    with open('data/cov/cov_all.fa', 'w') as of:
+        for seq in seqs:
+            metas = seqs[seq]
+            for meta in metas:
+                of.write('>{}\n'.format(meta['accession']))
+                of.write('{}\n'.format(str(seq)))
+
+    return seqs
+
+def split_seqs(seqs):
+    train_seqs, test_seqs = {}, {}
+
+    tprint('Splitting seqs...')
+    for idx, seq in enumerate(seqs):
+        if idx % 10 < 2:
+            test_seqs[seq] = seqs[seq]
+        else:
+            train_seqs[seq] = seqs[seq]
+    tprint('{} train seqs, {} test seqs.'
+           .format(len(train_seqs), len(test_seqs)))
+
+    return train_seqs, test_seqs
+
+def get_seqs(args):
+    fnames = [ 'data/cov/sars_cov2_seqs.fa',
+               'data/cov/viprbrc_db.fasta',
+               'data/cov/gisaid.fasta' ]
+
+    seqs = process(fnames)
+    # seqs = dict(list(seqs.items())[:100])
+    seq_len = max([ len(seq) for seq in seqs ]) + 2
+    # vocab_size = len(AAs) + 2
+
+    tprint('{} unique sequences with the max length of {}.'.format(len(seqs), seq_len))
+    return seqs
+
+def interpret_clusters(adata):
+    clusters = sorted(set(adata.obs['louvain']))
+    for cluster in clusters:
+        tprint('Cluster {}'.format(cluster))
+        adata_cluster = adata[adata.obs['louvain'] == cluster]
+        for var in [ 'host', 'country', 'strain' ]:
+            tprint('\t{}:'.format(var))
+            counts = Counter(adata_cluster.obs[var])
+            for val, count in counts.most_common():
+                tprint('\t\t{}: {}'.format(val, count))
+        tprint('')
+
+def plot_umap(adata, categories, namespace='cov'):
+    for category in categories:
+        sc.pl.umap(adata, color=category,
+                   save='_{}_{}.png'.format(namespace, category))

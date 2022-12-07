@@ -1,8 +1,18 @@
 from utils import *
 from anndata import AnnData
-from transformers import BertConfig, BertModel, BertTokenizer
+from transformers import BertConfig, BertModel, BertTokenizer, BertForSequenceClassification
 import torch
 from torch.utils.data import DataLoader, TensorDataset
+
+
+def get_labels(seqs, target):
+    labels = []
+    for i in range(len(seqs)):
+        label = list(seqs.items())[i][1][0][target]
+        labels.append(label)
+
+    unique_labels = list(dict.fromkeys(labels)) # remove duplicates
+    return labels, unique_labels
 
 
 def encode(seqs, tokenizer):
@@ -25,24 +35,22 @@ def encode(seqs, tokenizer):
     return torch.tensor(input_ids, dtype=torch.long), torch.tensor(attention_mask, dtype=torch.long)
 
 
-def get_batches(seqs, tokenizer, batch_size):
+def get_batches(seqs, target, tokenizer, batch_size):
 
     input_ids, attention_mask = encode(seqs, tokenizer)
 
-    # target_classes = []
-    # for i in range(len(seqs)):
-        # target_class = list(seqs.items())[i][1][0][target]
-        # target_classes.append(target_class)
-
-    # y_classes = list(dict.fromkeys(target_classes)) # remove duplicates
-    # y_indices = [y_classes.index(AA) for AA in target_classes] # class_name to class_index
-    # y = torch.tensor(list(y_indices), dtype=torch.long) # list to tensor
-    tensor_dataset = TensorDataset(input_ids, attention_mask) # , y)
+    labels, unique_labels = get_labels(seqs, target)
+    indices = [unique_labels.index(l) for l in labels] # class_name to class_index
+    y = torch.tensor(list(indices), dtype=torch.long) # list to tensor
+    tprint('input_ids:      {}'.format(input_ids.size()))
+    tprint('attention_mask: {}'.format(attention_mask.size()))
+    tprint('labels:         {}'.format(y.size()))
+    tensor_dataset = TensorDataset(input_ids, attention_mask, y)
     tensor_dataloader = DataLoader(tensor_dataset, batch_size=batch_size, shuffle=False)
     return tensor_dataloader
 
 
-def embed_seqs(args, model, seqs, device, use_cache):
+def embed_seqs(args, model, seqs, target, device, use_cache):
 
     mkdir_p('cache')
     embed_fname = 'cache/embeddings.npy'
@@ -52,11 +60,11 @@ def embed_seqs(args, model, seqs, device, use_cache):
         X_embed = np.load(embed_fname, allow_pickle=True)
     else:
         model.eval()
-        batches = get_batches(seqs, tokenizer, batch_size=args.batch_size)
+        batches = get_batches(seqs, target, tokenizer, batch_size=args.batch_size)
         X_embed = []
         for batch_id, batch_cpu in enumerate(batches):
             tprint('{}/{}'.format(batch_id*args.batch_size, len(seqs)))
-            input_ids, attention_mask = (t.to(device) for t in batch_cpu)
+            input_ids, attention_mask, labels = (t.to(device) for t in batch_cpu)
             with torch.no_grad():
                 outputs = model(input_ids=input_ids, attention_mask=attention_mask)
                 hidden_states = outputs.hidden_states
@@ -82,9 +90,9 @@ def embed_seqs(args, model, seqs, device, use_cache):
     return seqs
 
 
-def analyze_embedding(args, model, seqs, device, use_cache):
+def analyze_embedding(args, model, seqs, target, device, use_cache):
 
-    seqs = embed_seqs(args, model, seqs, device, use_cache)
+    seqs = embed_seqs(args, model, seqs, target, device, use_cache)
 
     X, obs = [], {}
     obs['n_seq'] = []
@@ -126,15 +134,17 @@ if __name__ == '__main__':
 
     vocabulary = { aa: idx + 1 for idx, aa in enumerate(sorted(AAs)) }
     seqs = get_seqs()
+    _, unique_labels = get_labels(seqs, 'group')
+    tprint('num_labels = {}'.format(len(unique_labels)))
     # seqs = sample_seqs(seqs) # random sampling 1% of the data
     # train_seqs, test_seqs = split_seqs(seqs)
     # print('{} train seqs, {} test seqs.'.format(len(train_seqs), len(test_seqs)))
 
     tokenizer = BertTokenizer.from_pretrained("Rostlab/prot_bert", do_lower_case=False)
-    config = BertConfig.from_pretrained("Rostlab/prot_bert", output_hidden_states=True)
-    model = BertModel.from_pretrained("Rostlab/prot_bert", config=config)
-    # model = BertForSequenceClassification.from_pretrained("Rostlab/prot_bert", config=config, num_labels=num_labels)
+    config = BertConfig.from_pretrained("Rostlab/prot_bert", output_hidden_states=True, num_labels=len(unique_labels))
+    # model = BertModel.from_pretrained("Rostlab/prot_bert", config=config)
+    model = BertForSequenceClassification.from_pretrained("Rostlab/prot_bert", config=config)
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
     tprint('Running on {}'.format(device))
     model.to(device)
-    analyze_embedding(args, model, seqs, device, use_cache=True)
+    analyze_embedding(args, model, seqs, target='group', device=device, use_cache=True)

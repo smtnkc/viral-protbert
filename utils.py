@@ -1,9 +1,12 @@
-import numpy as np
-import random
-import scanpy as sc
+import os
 import sys
+import errno
+import random
 import datetime
 import warnings
+import pickle
+import numpy as np
+import scanpy as sc
 from collections import Counter
 from dateutil.parser import parse as dparse
 from Bio import BiopythonWarning
@@ -20,6 +23,15 @@ AAs = [
     'Y', 'V', 'X', 'Z', 'J', 'U', 'B',
 ]
 
+def mkdir_p(path):
+    try:
+        os.makedirs(path)
+    except OSError as exc:  # Python >2.5
+        if exc.errno == errno.EEXIST and os.path.isdir(path):
+            pass
+        else:
+            raise
+
 def tprint(string):
     string = str(string)
     sys.stdout.write(str(datetime.datetime.now()) + ' | ')
@@ -34,6 +46,8 @@ def parse_args():
                         help='Number of training epochs')
     parser.add_argument('--seed', type=int, default=1,
                         help='Random seed')
+    parser.add_argument('--batch_size', type=int, default=1,
+                        help='Batch size')
     parser.add_argument('--train', action='store_true',
                         help='Train model')
     parser.add_argument('--test', action='store_true',
@@ -165,17 +179,29 @@ def split_seqs(seqs):
 
     return train_seqs, test_seqs
 
-def get_seqs(args):
+def sample_seqs(seqs):
+    sample_seqs = {}
+
+    tprint('Sampling seqs...')
+    for idx, seq in enumerate(seqs):
+        if idx % 100 == 0:
+            sample_seqs[seq] = seqs[seq]
+
+    tprint('{} seqs are sampled.'.format(len(sample_seqs)))
+
+    return sample_seqs
+
+def get_seqs():
     fnames = [ 'data/cov/sars_cov2_seqs.fa',
                'data/cov/viprbrc_db.fasta',
                'data/cov/gisaid.fasta' ]
 
     seqs = process(fnames)
-    # seqs = dict(list(seqs.items())[:100])
-    seq_len = max([ len(seq) for seq in seqs ]) + 2
+
+    max_seq_len = max([ len(seq) for seq in seqs ])
     # vocab_size = len(AAs) + 2
 
-    tprint('{} unique sequences with the max length of {}.'.format(len(seqs), seq_len))
+    tprint('{} unique sequences with the max length of {}.'.format(len(seqs), max_seq_len))
     return seqs
 
 def interpret_clusters(adata):
@@ -192,5 +218,4 @@ def interpret_clusters(adata):
 
 def plot_umap(adata, categories, namespace='cov'):
     for category in categories:
-        sc.pl.umap(adata, color=category,
-                   save='_{}_{}.png'.format(namespace, category))
+        sc.pl.umap(adata, color=category, save='_{}_{}.png'.format(namespace, category), show=False)

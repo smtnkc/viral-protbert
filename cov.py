@@ -111,6 +111,7 @@ def get_batches_for_masked_lm(seqs, tokenizer, batch_size, use_cache=True):
     else:    
         input_ids, attention_mask, labels = encode_for_masked_lm(seqs, tokenizer)
         if use_cache:
+            mkdir_p('cache')
             tprint('Saving input_ids, attention_mask, and labels...')
             torch.save(input_ids, fnames[0])
             torch.save(attention_mask, fnames[1])
@@ -125,12 +126,12 @@ def get_batches_for_masked_lm(seqs, tokenizer, batch_size, use_cache=True):
     return tensor_dataloader
 
 
-def embed_seqs(args, model, seqs, target, device, use_cache):
+def embed_seqs(args, model, seqs, target, device, use_cache=True):
 
-    mkdir_p('cache')
     embed_fname = 'cache/embeddings.npy'
 
     if use_cache and os.path.exists(embed_fname):
+        mkdir_p('cache')
         tprint('Loading X_embed.npy')
         X_embed = np.load(embed_fname, allow_pickle=True)
     else:
@@ -157,6 +158,7 @@ def embed_seqs(args, model, seqs, target, device, use_cache):
                 X_embed.append(token_embeddings)
 
         if use_cache:
+            mkdir_p('cache')
             tprint('Saving X_embed.npy')
             np.save(embed_fname, X_embed)
 
@@ -267,10 +269,10 @@ if __name__ == '__main__':
         config = BertConfig.from_pretrained("Rostlab/prot_bert", output_hidden_states=True, num_labels=len(unique_labels))
         model = BertForSequenceClassification.from_pretrained("Rostlab/prot_bert", config=config)
         model.to(device)
-        analyze_embedding(args, model, seqs, target='group', device=device, use_cache=False)
+        analyze_embedding(args, model, seqs, target='group', device=device, use_cache=args.use_cache)
 
     if args.test:
         config = BertConfig.from_pretrained("Rostlab/prot_bert", output_hidden_states=True, output_attentions=True)
         model = BertForMaskedLM.from_pretrained("Rostlab/prot_bert", config=config)
         model.to(device)
-        evaluate(test_seqs, tokenizer, model, device, use_cache=True)
+        evaluate(test_seqs, tokenizer, model, device, use_cache=args.use_cache)

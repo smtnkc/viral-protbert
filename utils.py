@@ -63,6 +63,8 @@ def parse_args():
                         help='Test model')
     parser.add_argument('--embed', action='store_true',
                         help='Analyze embeddings')
+    parser.add_argument('--use_cache', action='store_true',
+                        help='Use cached data')
 
     args = parser.parse_args()
     return args

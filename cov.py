@@ -1,9 +1,10 @@
 from utils import *
 from anndata import AnnData
-from transformers import BertConfig, BertModel, BertTokenizer, BertForSequenceClassification
+from transformers import BertConfig, BertForMaskedLM, BertTokenizer, BertForSequenceClassification
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
-
+from sklearn.metrics import accuracy_score
 
 def get_labels(seqs, target):
     labels = []
@@ -15,7 +16,7 @@ def get_labels(seqs, target):
     return labels, unique_labels
 
 
-def encode(seqs, tokenizer):
+def encode_for_classification(seqs, tokenizer):
     sents = []
     max_seq_len = 0
     for i in range(len(seqs)):
@@ -32,20 +33,94 @@ def encode(seqs, tokenizer):
         input_ids.append(tokenized_sent['input_ids'])
         attention_mask.append(tokenized_sent['attention_mask'])
 
-    return torch.tensor(input_ids, dtype=torch.long), torch.tensor(attention_mask, dtype=torch.long)
+    input_ids = torch.squeeze(torch.stack(input_ids))
+    attention_mask = torch.squeeze(torch.stack(attention_mask))
+
+    return input_ids, attention_mask
 
 
-def get_batches(seqs, target, tokenizer, batch_size):
+def get_batches_for_classification(seqs, target, tokenizer, batch_size):
 
-    input_ids, attention_mask = encode(seqs, tokenizer)
+    input_ids, attention_mask = encode_for_classification(seqs, tokenizer)
 
     labels, unique_labels = get_labels(seqs, target)
     indices = [unique_labels.index(l) for l in labels] # class_name to class_index
     y = torch.tensor(list(indices), dtype=torch.long) # list to tensor
-    tprint('input_ids:      {}'.format(input_ids.size()))
-    tprint('attention_mask: {}'.format(attention_mask.size()))
-    tprint('labels:         {}'.format(y.size()))
+
     tensor_dataset = TensorDataset(input_ids, attention_mask, y)
+    tensor_dataloader = DataLoader(tensor_dataset, batch_size=batch_size, shuffle=False)
+    return tensor_dataloader
+
+
+def encode_for_masked_lm(seqs, tokenizer):
+    sents = []
+    max_seq_len = 0
+    for i in range(len(seqs)):
+        seq = list(seqs.items())[i][0]
+        if len(seq) > max_seq_len:
+            max_seq_len = len(seq)
+        sent = " ".join(seq)
+        sents.append(sent)
+
+    masked_sents = []
+    unmasked_sents = []
+
+    tprint('Masking...')
+    for s in tqdm(sents):
+        words = s.split()
+        for i in range(len(words)):
+            sent_pre = words[:i]
+            sent_post = words[i+1:]
+            masked_sent = sent_pre + [tokenizer.mask_token] + sent_post
+            masked_sents.append(" ".join(masked_sent))
+            unmasked_sents.append(s) # this will be used as true label
+
+    input_ids = []
+    attention_mask = []
+    labels = []
+
+    tprint('Tokenizing...')
+    with tqdm(total=(len(masked_sents))) as pbar:
+        for (masked_sent, unmasked_sent) in zip(masked_sents, unmasked_sents):
+            t_masked_sent = tokenizer(masked_sent, return_tensors="pt", max_length=max_seq_len+2, padding='max_length')
+            t_unmasked_sent = tokenizer(unmasked_sent, return_tensors="pt", max_length=max_seq_len+2, padding='max_length')["input_ids"]
+            label = torch.where(t_masked_sent.input_ids == tokenizer.mask_token_id, t_unmasked_sent, -100)
+            input_ids.append(t_masked_sent['input_ids'])
+            attention_mask.append(t_masked_sent['attention_mask'])
+            labels.append(label)
+            pbar.update(1)
+
+    input_ids = torch.squeeze(torch.stack(input_ids))
+    attention_mask = torch.squeeze(torch.stack(attention_mask))
+    labels = torch.squeeze(torch.stack(labels))
+
+    return input_ids, attention_mask, labels
+
+
+
+def get_batches_for_masked_lm(seqs, tokenizer, batch_size, use_cache=True):
+
+    fnames = ['cache/input_ids.pt', 'cache/attention_mask.pt', 'cache/labels.pt']
+
+    if use_cache and (os.path.exists(fnames[0]) and 
+        os.path.exists(fnames[1]) and os.path.exists(fnames[2])):
+        tprint('Loading input_ids, attention_mask, and labels...')
+        input_ids = torch.load(fnames[0])
+        attention_mask = torch.load(fnames[1])
+        labels = torch.load(fnames[2])
+    else:    
+        input_ids, attention_mask, labels = encode_for_masked_lm(seqs, tokenizer)
+        if use_cache:
+            tprint('Saving input_ids, attention_mask, and labels...')
+            torch.save(input_ids, fnames[0])
+            torch.save(attention_mask, fnames[1])
+            torch.save(labels, fnames[2])
+
+    tprint('input_ids:        {}     Type:   {}'.format(input_ids.size(), input_ids.type()))
+    tprint('attention_mask:   {}     Type:   {}'.format(attention_mask.size(), attention_mask.type()))
+    tprint('labels:           {}     Type:   {}'.format(labels.size(), labels.type()))
+
+    tensor_dataset = TensorDataset(input_ids, attention_mask, labels)
     tensor_dataloader = DataLoader(tensor_dataset, batch_size=batch_size, shuffle=False)
     return tensor_dataloader
 
@@ -60,7 +135,9 @@ def embed_seqs(args, model, seqs, target, device, use_cache):
         X_embed = np.load(embed_fname, allow_pickle=True)
     else:
         model.eval()
-        batches = get_batches(seqs, target, tokenizer, batch_size=args.batch_size)
+        batches = get_batches_for_classification(seqs, target, tokenizer,
+                    batch_size=args.batch_size, use_cache=use_cache)
+
         X_embed = []
         for batch_id, batch_cpu in enumerate(batches):
             tprint('{}/{}'.format(batch_id*args.batch_size, len(seqs)))
@@ -129,22 +206,71 @@ def analyze_embedding(args, model, seqs, target, device, use_cache):
     plot_umap(adata_cov2, [ 'host', 'group', 'country' ], namespace='cov7')
 
 
-if __name__ == '__main__':
-    args = parse_args()
+def evaluate(seqs, tokenizer, model, device, use_cache):
 
-    vocabulary = { aa: idx + 1 for idx, aa in enumerate(sorted(AAs)) }
+    batches = get_batches_for_masked_lm(seqs, tokenizer, batch_size=1, use_cache=use_cache)
+    flat_preds, flat_labels, all_logits, all_labels = [], [], [], []
+    total_loss = 0.0
+
+    model.eval()
+    tprint('Testing...')
+    for batch_cpu in tqdm(batches):
+        batch_gpu = (t.to(device) for t in batch_cpu)
+        input_ids_gpu, attention_mask, labels = batch_gpu
+        with torch.no_grad():
+            outputs = model(input_ids=input_ids_gpu, attention_mask=attention_mask, labels=labels)
+            all_logits.append(outputs.logits.cpu())
+            all_labels.append(labels.cpu())
+            total_loss += outputs.loss.item()
+
+            # To calculate accuracy
+            mask_token_index = (input_ids_gpu == tokenizer.mask_token_id)[0].nonzero(as_tuple=True)[0].item()      
+            predicted_token_id = outputs.logits[0, mask_token_index].argmax(axis=-1).item()
+            true_token_id = labels[0, mask_token_index].item()
+            flat_preds.append(predicted_token_id)
+            flat_labels.append(true_token_id)
+
+    all_logits = torch.squeeze(torch.stack(all_logits))
+    all_labels = torch.squeeze(torch.stack(all_labels))
+
+    tprint('Logits:   {}'.format(all_logits.size()))
+    tprint('Labels:   {}'.format(all_labels.size()))
+
+    cre = F.cross_entropy(all_logits.view(-1, tokenizer.vocab_size), all_labels.view(-1))
+
+    acc = accuracy_score(flat_labels, flat_preds)
+    tprint("MLM Loss:        {:.5f}".format(total_loss/len(batches)))
+    tprint("Cross Entropy:   {:.5f}".format(cre.item()))
+    tprint("Perplexity:      {:.5f}".format(torch.exp(cre).item()))
+    tprint("Accuracy:        {:.5f}".format(acc))
+
+
+if __name__ == '__main__':
+
+    args = parse_args()
     seqs = get_seqs()
-    _, unique_labels = get_labels(seqs, 'group')
-    tprint('num_labels = {}'.format(len(unique_labels)))
-    # seqs = sample_seqs(seqs) # random sampling 1% of the data
-    # train_seqs, test_seqs = split_seqs(seqs)
-    # print('{} train seqs, {} test seqs.'.format(len(train_seqs), len(test_seqs)))
+    # seqs = get_dummy_seqs()
+    # seqs = sample_seqs(seqs, p=1) # random sampling p% of the data
+
+    if args.embed:
+        labels, unique_labels = get_labels(seqs, 'group')
+        tprint('num_labels = {}'.format(len(unique_labels)))
+
+    train_seqs, test_seqs = split_seqs(seqs)
+    tprint('{} train seqs, {} test seqs.'.format(len(train_seqs), len(test_seqs)))
 
     tokenizer = BertTokenizer.from_pretrained("Rostlab/prot_bert", do_lower_case=False)
-    config = BertConfig.from_pretrained("Rostlab/prot_bert", output_hidden_states=True, num_labels=len(unique_labels))
-    # model = BertModel.from_pretrained("Rostlab/prot_bert", config=config)
-    model = BertForSequenceClassification.from_pretrained("Rostlab/prot_bert", config=config)
-    device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     tprint('Running on {}'.format(device))
-    model.to(device)
-    analyze_embedding(args, model, seqs, target='group', device=device, use_cache=True)
+
+    if args.embed:
+        config = BertConfig.from_pretrained("Rostlab/prot_bert", output_hidden_states=True, num_labels=len(unique_labels))
+        model = BertForSequenceClassification.from_pretrained("Rostlab/prot_bert", config=config)
+        model.to(device)
+        analyze_embedding(args, model, seqs, target='group', device=device, use_cache=False)
+
+    if args.test:
+        config = BertConfig.from_pretrained("Rostlab/prot_bert", output_hidden_states=True, output_attentions=True)
+        model = BertForMaskedLM.from_pretrained("Rostlab/prot_bert", config=config)
+        model.to(device)
+        evaluate(test_seqs, tokenizer, model, device, use_cache=True)

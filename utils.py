@@ -5,6 +5,7 @@ import random
 import datetime
 import warnings
 import pickle
+from tqdm import tqdm
 import numpy as np
 import scanpy as sc
 from collections import Counter
@@ -22,6 +23,14 @@ AAs = [
     'I', 'L', 'K', 'M', 'F', 'P', 'S', 'T', 'W',
     'Y', 'V', 'X', 'Z', 'J', 'U', 'B',
 ]
+
+vocab = {
+    '[PAD]': 0, '[UNK]': 1, '[CLS]': 2, '[SEP]': 3, '[MASK]': 4,
+    'L': 5, 'A': 6, 'G': 7, 'V': 8, 'E': 9, 'S': 10, 'I': 11,
+    'K': 12, 'R': 13, 'D': 14, 'T': 15, 'P': 16, 'N': 17, 'Q': 18,
+    'F': 19, 'Y': 20, 'M': 21, 'H':22, 'C': 23, 'W': 24, 'X': 25,
+    'U': 26, 'B': 27, 'Z':28, 'O': 29
+}
 
 def mkdir_p(path):
     try:
@@ -52,6 +61,8 @@ def parse_args():
                         help='Train model')
     parser.add_argument('--test', action='store_true',
                         help='Test model')
+    parser.add_argument('--embed', action='store_true',
+                        help='Analyze embeddings')
 
     args = parser.parse_args()
     return args
@@ -179,12 +190,12 @@ def split_seqs(seqs):
 
     return train_seqs, test_seqs
 
-def sample_seqs(seqs):
+def sample_seqs(seqs, p=1):
     sample_seqs = {}
 
     tprint('Sampling seqs...')
     for idx, seq in enumerate(seqs):
-        if idx % 100 == 0:
+        if idx % (100//p) == 0:
             sample_seqs[seq] = seqs[seq]
 
     tprint('{} seqs are sampled.'.format(len(sample_seqs)))
@@ -199,10 +210,21 @@ def get_seqs():
     seqs = process(fnames)
 
     max_seq_len = max([ len(seq) for seq in seqs ])
-    # vocab_size = len(AAs) + 2
 
     tprint('{} unique sequences with the max length of {}.'.format(len(seqs), max_seq_len))
     return seqs
+
+def get_dummy_seqs():
+    dummy = {}
+
+    for i in range(20):
+        k = random.randint(100, 110) # k = random length of sequence
+        L = random.choices(AAs, k=k) # L = k random AAs
+        key = ''.join(L)
+        value = 'metata-' + str(i)
+        dummy[key] = value
+
+    return dummy
 
 def interpret_clusters(adata):
     clusters = sorted(set(adata.obs['louvain']))

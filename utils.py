@@ -56,11 +56,13 @@ def parse_args():
     parser.add_argument('--seed', type=int, default=1,
                         help='Random seed')
     parser.add_argument('--batch_size', type=int, default=1,
-                        help='Batch size')
+                        help='Batch size for the tokenizer and model.')
     parser.add_argument('--train', action='store_true',
                         help='Train model')
     parser.add_argument('--test', action='store_true',
                         help='Test model')
+    parser.add_argument('--inference_batch_size', type=int, default=5,
+                        help='Batch size for test run. Set 0 to disable batching.')
     parser.add_argument('--embed', action='store_true',
                         help='Analyze embeddings')
     parser.add_argument('--use_cache', action='store_true',
@@ -190,10 +192,9 @@ def split_seqs(seqs):
 
     return train_seqs, test_seqs
 
-def sample_seqs(seqs, p=1):
+def random_sample_seqs(seqs, p=1):
     sample_seqs = {}
 
-    tprint('Sampling seqs...')
     for idx, seq in enumerate(seqs):
         if idx % (100//p) == 0:
             sample_seqs[seq] = seqs[seq]
@@ -202,7 +203,22 @@ def sample_seqs(seqs, p=1):
 
     return sample_seqs
 
-def get_seqs():
+def batch_seqs(seqs, inference_batch_size=20):
+
+    n_batches = len(seqs) // inference_batch_size
+    if len(seqs) % inference_batch_size > 0:
+        n_batches += 1
+    batches = [{} for _ in range(n_batches)]
+
+    for idx, seq in enumerate(seqs):
+        batch_id = idx // inference_batch_size
+        if batch_id == n_batches:
+            batch_id = n_batches - 1
+        batches[batch_id][seq] = seqs[seq]
+
+    return batches
+
+def read_seqs():
     fnames = [ 'data/cov/sars_cov2_seqs.fa',
                'data/cov/viprbrc_db.fasta',
                'data/cov/gisaid.fasta' ]
@@ -212,9 +228,9 @@ def get_seqs():
     max_seq_len = max([ len(seq) for seq in seqs ])
 
     tprint('{} unique sequences with the max length of {}.'.format(len(seqs), max_seq_len))
-    return seqs
+    return seqs, max_seq_len
 
-def get_dummy_seqs():
+def generate_dummy_seqs():
     dummy = {}
 
     for i in range(20):

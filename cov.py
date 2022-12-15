@@ -52,13 +52,10 @@ def get_batches_for_classification(seqs, target, tokenizer, batch_size):
     return tensor_dataloader
 
 
-def encode_for_masked_lm(seqs, tokenizer):
+def encode_for_masked_lm(seqs, tokenizer, max_seq_len):
     sents = []
-    max_seq_len = 0
     for i in range(len(seqs)):
         seq = list(seqs.items())[i][0]
-        if len(seq) > max_seq_len:
-            max_seq_len = len(seq)
         sent = " ".join(seq)
         sents.append(sent)
 
@@ -99,8 +96,7 @@ def encode_for_masked_lm(seqs, tokenizer):
     return input_ids, attention_masks, labels
 
 
-
-def get_batches_for_masked_lm(seqs, tokenizer, batch_size, use_cache=True):
+def get_batches_for_masked_lm(seqs, tokenizer, max_seq_len, batch_size, use_cache=True):
 
     fnames = ['cache/input_ids.pt', 'cache/attention_mask.pt', 'cache/labels.pt']
 
@@ -111,7 +107,7 @@ def get_batches_for_masked_lm(seqs, tokenizer, batch_size, use_cache=True):
         attention_mask = torch.load(fnames[1])
         labels = torch.load(fnames[2])
     else:    
-        input_ids, attention_mask, labels = encode_for_masked_lm(seqs, tokenizer)
+        input_ids, attention_mask, labels = encode_for_masked_lm(seqs, tokenizer, max_seq_len)
         if use_cache:
             mkdir_p('cache')
             tprint('Saving input_ids, attention_mask, and labels...')
@@ -210,9 +206,9 @@ def analyze_embedding(args, model, seqs, target, device, use_cache):
     plot_umap(adata_cov2, [ 'host', 'group', 'country' ], namespace='cov7')
 
 
-def evaluate(seqs, tokenizer, model, device, use_cache):
+def evaluate(seqs, tokenizer, model, device, max_seq_len, use_cache):
 
-    batches = get_batches_for_masked_lm(seqs, tokenizer, batch_size=1, use_cache=use_cache)
+    batches = get_batches_for_masked_lm(seqs, tokenizer, max_seq_len, batch_size=1, use_cache=use_cache)
     flat_preds, flat_labels, all_logits, all_labels = [], [], [], []
     total_loss = 0.0
 
@@ -241,20 +237,25 @@ def evaluate(seqs, tokenizer, model, device, use_cache):
     tprint('Labels:   {}'.format(all_labels.size()))
 
     cre = F.cross_entropy(all_logits.view(-1, tokenizer.vocab_size), all_labels.view(-1))
-
+    perplexity = torch.exp(cre).item()
+    cre = cre.item()
+    mlm = total_loss/len(batches)
     acc = accuracy_score(flat_labels, flat_preds)
-    tprint("MLM Loss:        {:.5f}".format(total_loss/len(batches)))
-    tprint("Cross Entropy:   {:.5f}".format(cre.item()))
-    tprint("Perplexity:      {:.5f}".format(torch.exp(cre).item()))
+
+    tprint("MLM Loss:        {:.5f}".format(mlm))
+    tprint("Cross Entropy:   {:.5f}".format(cre))
+    tprint("Perplexity:      {:.5f}".format(perplexity))
     tprint("Accuracy:        {:.5f}".format(acc))
+
+    return mlm, cre, perplexity, acc
 
 
 if __name__ == '__main__':
 
     args = parse_args()
-    seqs = get_seqs()
-    # seqs = get_dummy_seqs()
-    # seqs = sample_seqs(seqs, p=1) # random sampling p% of the data
+    seqs, max_seq_len = read_seqs()
+    # seqs = generate_dummy_seqs() # 20 random seqs with length [100, 110) just for testing
+    # seqs = random_sample_seqs(seqs, p=1) # random sampling p% of the sequences just for testing
 
     if args.embed:
         labels, unique_labels = get_labels(seqs, 'group')
@@ -262,6 +263,10 @@ if __name__ == '__main__':
 
     train_seqs, test_seqs = split_seqs(seqs)
     tprint('{} train seqs, {} test seqs.'.format(len(train_seqs), len(test_seqs)))
+
+    if args.inference_batch_size > 0:
+        test_seqs_batches = batch_seqs(test_seqs, inference_batch_size=args.inference_batch_size) # test on batches of sequences to save memory
+        tprint('Batch lengths of test seqs: {}'.format([len(batch) for batch in test_seqs_batches]))
 
     tokenizer = BertTokenizer.from_pretrained("Rostlab/prot_bert", do_lower_case=False)
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
@@ -277,4 +282,23 @@ if __name__ == '__main__':
         config = BertConfig.from_pretrained("Rostlab/prot_bert", output_hidden_states=True, output_attentions=True)
         model = BertForMaskedLM.from_pretrained("Rostlab/prot_bert", config=config)
         model.to(device)
-        evaluate(test_seqs, tokenizer, model, device, use_cache=args.use_cache)
+
+        if args.inference_batch_size > 0:
+            total_mlm, total_cre, total_perplexity, total_acc = 0.0, 0.0, 0.0, 0.0
+            for batch_id, test_seqs_batch in enumerate(test_seqs_batches):
+                mlm, cre, perplexity, acc = evaluate(test_seqs_batch, tokenizer, model, device, max_seq_len, use_cache=args.use_cache)
+                total_mlm += mlm
+                total_cre += cre
+                total_perplexity += perplexity
+                total_acc += acc
+        
+                avg_mlm = total_mlm/(batch_id+1)
+                avg_cre = total_cre/(batch_id+1)
+                avg_perplexity = total_perplexity/(batch_id+1)
+                avg_acc = total_acc/(batch_id+1)
+                tprint('Average MLM Loss:        {:.5f}'.format(avg_mlm))
+                tprint('Average Cross Entropy:   {:.5f}'.format(avg_cre))
+                tprint('Average Perplexity:      {:.5f}'.format(avg_perplexity))
+                tprint('Average Accuracy:        {:.5f}'.format(avg_acc))
+        else:
+            mlm, cre, perplexity, acc = evaluate(test_seqs, tokenizer, model, device, max_seq_len, use_cache=args.use_cache)

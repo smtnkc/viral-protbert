@@ -206,6 +206,12 @@ def analyze_embedding(args, model, seqs, target, device, use_cache):
     plot_umap(adata_cov2, [ 'host', 'group', 'country' ], namespace='cov7')
 
 
+def get_batch_size_mb(batch):
+    return (batch[0].nelement() * batch[0].element_size() + 
+            batch[1].nelement() * batch[1].element_size() + 
+            batch[2].nelement() * batch[2].element_size()) / 1024**2
+
+
 def evaluate(seqs, tokenizer, model, device, max_seq_len, use_cache):
 
     batches = get_batches_for_masked_lm(seqs, tokenizer, max_seq_len, batch_size=1, use_cache=use_cache)
@@ -213,7 +219,7 @@ def evaluate(seqs, tokenizer, model, device, max_seq_len, use_cache):
     total_loss = 0.0
 
     model.eval()
-    tprint('Testing...')
+    tprint('{} minibatches. Each {:.2f} MB'.format(len(batches), get_batch_size_mb(next(iter(batches)))))
     for batch_cpu in tqdm(batches):
         batch_gpu = (t.to(device) for t in batch_cpu)
         input_ids_gpu, attention_mask, labels = batch_gpu
@@ -279,13 +285,13 @@ if __name__ == '__main__':
         analyze_embedding(args, model, seqs, target='group', device=device, use_cache=args.use_cache)
 
     if args.test:
-        config = BertConfig.from_pretrained("Rostlab/prot_bert", output_hidden_states=True, output_attentions=True)
-        model = BertForMaskedLM.from_pretrained("Rostlab/prot_bert", config=config)
+        model = BertForMaskedLM.from_pretrained("Rostlab/prot_bert")
         model.to(device)
 
         if args.inference_batch_size > 0:
             total_mlm, total_cre, total_perplexity, total_acc = 0.0, 0.0, 0.0, 0.0
             for batch_id, test_seqs_batch in enumerate(test_seqs_batches):
+                tprint('Inference batch {} of {}...'.format(batch_id+1, len(test_seqs_batches)))
                 mlm, cre, perplexity, acc = evaluate(test_seqs_batch, tokenizer, model, device, max_seq_len, use_cache=args.use_cache)
                 total_mlm += mlm
                 total_cre += cre

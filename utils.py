@@ -61,7 +61,7 @@ def parse_args():
                         help='Train model')
     parser.add_argument('--test', action='store_true',
                         help='Test model')
-    parser.add_argument('--inference_batch_size', type=int, default=5,
+    parser.add_argument('--inference_batch_size', type=int, default=76,
                         help='Batch size for test run. Set 0 to disable batching.')
     parser.add_argument('--embed', action='store_true',
                         help='Analyze embeddings')
@@ -203,7 +203,7 @@ def random_sample_seqs(seqs, p=1):
 
     return sample_seqs
 
-def batch_seqs(seqs, inference_batch_size=20):
+def batch_seqs(seqs, inference_batch_size=76):
 
     n_batches = len(seqs) // inference_batch_size
     if len(seqs) % inference_batch_size > 0:

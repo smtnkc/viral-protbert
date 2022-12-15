@@ -187,8 +187,6 @@ def split_seqs(seqs):
             test_seqs[seq] = seqs[seq]
         else:
             train_seqs[seq] = seqs[seq]
-    tprint('{} train seqs, {} test seqs.'
-           .format(len(train_seqs), len(test_seqs)))
 
     return train_seqs, test_seqs
 

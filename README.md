@@ -10,7 +10,11 @@ conda env create -n <env_name> -f environment.yaml
 ## Running Instructions
 
 ```bash
-python cov.py
+python cov.py --test --use_cache
+```
+
+```bash
+python cov.py --embed --use_cache
 ```
 
 ## References

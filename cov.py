@@ -76,25 +76,27 @@ def encode_for_masked_lm(seqs, tokenizer):
             unmasked_sents.append(s) # this will be used as true label
 
     input_ids = []
-    attention_mask = []
+    attention_masks = []
     labels = []
 
     tprint('Tokenizing...')
     with tqdm(total=(len(masked_sents))) as pbar:
         for (masked_sent, unmasked_sent) in zip(masked_sents, unmasked_sents):
-            t_masked_sent = tokenizer(masked_sent, return_tensors="pt", max_length=max_seq_len+2, padding='max_length')
-            t_unmasked_sent = tokenizer(unmasked_sent, return_tensors="pt", max_length=max_seq_len+2, padding='max_length')["input_ids"]
-            label = torch.where(t_masked_sent.input_ids == tokenizer.mask_token_id, t_unmasked_sent, -100)
-            input_ids.append(t_masked_sent['input_ids'])
-            attention_mask.append(t_masked_sent['attention_mask'])
-            labels.append(label)
+            # Note that [PAD] = 0, [CLS] = 2, [SEP] = 3, [MASK] = 4
+            inputs = tokenizer(masked_sent, return_tensors="pt", max_length=max_seq_len+2, padding='max_length')     # [2 9 8 4 6 3 0 0]
+            u_inputs = tokenizer(unmasked_sent, return_tensors="pt", max_length=max_seq_len+2, padding='max_length') # [2 9 8 7 6 3 0 0]
+            label = torch.where(inputs.input_ids == tokenizer.mask_token_id,
+                                u_inputs["input_ids"], -100) # [-100 -100 -100 7 -100 -100 -100 -100]
+            input_ids.append(inputs['input_ids']) # [[2 9 8 4 6 3 0 0]]
+            attention_masks.append(inputs['attention_mask']) # [[1 1 1 1 1 1 0 0]]
+            labels.append(label) # [[-100 -100 -100 7 -100 -100]]
             pbar.update(1)
 
     input_ids = torch.squeeze(torch.stack(input_ids))
-    attention_mask = torch.squeeze(torch.stack(attention_mask))
+    attention_masks = torch.squeeze(torch.stack(attention_masks))
     labels = torch.squeeze(torch.stack(labels))
 
-    return input_ids, attention_mask, labels
+    return input_ids, attention_masks, labels
 
 
 

@@ -55,18 +55,20 @@ def parse_args():
                         help='Number of training epochs')
     parser.add_argument('--seed', type=int, default=1,
                         help='Random seed')
-    parser.add_argument('--batch_size', type=int, default=1,
+    parser.add_argument('--minibatch_size', type=int, default=24,
                         help='Batch size for the tokenizer and model.')
     parser.add_argument('--train', action='store_true',
                         help='Train model')
     parser.add_argument('--test', action='store_true',
                         help='Test model')
-    parser.add_argument('--inference_batch_size', type=int, default=76,
+    parser.add_argument('--inference_batch_size', type=int, default=38,
                         help='Batch size for test run. Set 0 to disable batching.')
     parser.add_argument('--embed', action='store_true',
                         help='Analyze embeddings')
     parser.add_argument('--use_cache', action='store_true',
                         help='Use cached data')
+    parser.add_argument('--dummy', type=int, default=0,
+                        help='Use n random seqs with length [100, 110). Set 0 to disable.')
 
     args = parser.parse_args()
     return args
@@ -230,17 +232,17 @@ def read_seqs():
     tprint('{} unique sequences with the max length of {}.'.format(len(seqs), max_seq_len))
     return seqs, max_seq_len
 
-def generate_dummy_seqs():
+def generate_dummy_seqs(n):
     dummy = {}
 
-    for i in range(20):
+    for i in range(n):
         k = random.randint(100, 110) # k = random length of sequence
         L = random.choices(AAs, k=k) # L = k random AAs
         key = ''.join(L)
         value = 'metata-' + str(i)
         dummy[key] = value
 
-    return dummy
+    return dummy, 110
 
 def interpret_clusters(adata):
     clusters = sorted(set(adata.obs['louvain']))

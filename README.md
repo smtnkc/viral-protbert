@@ -12,7 +12,13 @@ conda env create -n <env_name> -f environment.yaml
 ## Running Instructions
 
 ```bash
-python cov.py --test --inference_batch_size=76
+python cov.py --test --inference_batch_size=38 --minibatch_size=128
+```
+
+**Note:** Use ``--minibatch_size=24`` (which requires ~11 Gb of GPU RAM) on DARG server.
+
+```bash
+srun --jobid=<job_id> nvidia-smi
 ```
 
 ```bash

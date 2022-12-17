@@ -1,0 +1,78 @@
+2022-12-17 14:41:19.862423 | Splitting seqs...
+2022-12-17 14:41:19.863243 | 32 train seqs, 8 test seqs.
+2022-12-17 14:41:19.863331 | Minibatch lengths: [3, 3, 2]
+2022-12-17 14:41:25.776417 | Running on cuda. Detected 4 GPUs.
+Some weights of the model checkpoint at Rostlab/prot_bert were not used when initializing BertForMaskedLM: ['cls.seq_relationship.weight', 'cls.seq_relationship.bias']
+- This IS expected if you are initializing BertForMaskedLM from the checkpoint of a model trained on another task or with another architecture (e.g. initializing a BertForSequenceClassification model from a BertForPreTraining model).
+- This IS NOT expected if you are initializing BertForMaskedLM from the checkpoint of a model that you expect to be exactly identical (initializing a BertForSequenceClassification model from a BertForSequenceClassification model).
+2022-12-17 14:41:36.321690 | Inference batch 1 of 3...
+2022-12-17 14:41:36.321794 | Masking...
+100%|██████████| 3/3 [00:00<00:00, 1252.03it/s]2022-12-17 14:41:36.367145 | Tokenizing...
+
+100%|██████████| 319/319 [00:00<00:00, 813.57it/s]2022-12-17 14:41:36.762552 | input_ids:        torch.Size([319, 112])     Type:   torch.LongTensor
+2022-12-17 14:41:36.762595 | attention_mask:   torch.Size([319, 112])     Type:   torch.LongTensor
+2022-12-17 14:41:36.762616 | labels:           torch.Size([319, 112])     Type:   torch.LongTensor
+2022-12-17 14:41:36.768130 | Num of minibatches: 20
+2022-12-17 14:41:36.768197 | Minibatch shape:    torch.Size([3, 16, 112])
+2022-12-17 14:41:36.768229 | Minibatch memory:   0.04 MB
+
+  0%|          | 0/20 [00:00<?, ?it/s]/truba/home/stenekeci/miniconda3/envs/protbert/lib/python3.8/site-packages/torch/nn/parallel/_functions.py:68: UserWarning: Was asked to gather along dimension 0, but all input tensors were scalars; will instead unsqueeze and return a vector.
+  warnings.warn('Was asked to gather along dimension 0, but all '
+100%|██████████| 20/20 [00:09<00:00,  2.02it/s]2022-12-17 14:41:46.694477 | Logits:   torch.Size([319, 112, 30])
+2022-12-17 14:41:46.694515 | Labels:   torch.Size([319, 112])
+2022-12-17 14:41:46.731868 | MLM Loss:        6.49299
+2022-12-17 14:41:46.731968 | Cross Entropy:   6.50318
+2022-12-17 14:41:46.732009 | Perplexity:      667.26270
+2022-12-17 14:41:46.732052 | Accuracy:        0.00000
+2022-12-17 14:41:46.732152 | Average MLM Loss:        6.49299
+2022-12-17 14:41:46.732191 | Average Cross Entropy:   6.50318
+2022-12-17 14:41:46.732224 | Average Perplexity:      667.26270
+2022-12-17 14:41:46.732259 | Average Accuracy:        0.00000
+2022-12-17 14:41:46.732296 | Inference batch 2 of 3...
+2022-12-17 14:41:46.732411 | Masking...
+
+100%|██████████| 3/3 [00:00<00:00, 1365.78it/s]2022-12-17 14:41:46.735361 | Tokenizing...
+
+100%|██████████| 312/312 [00:00<00:00, 788.22it/s]2022-12-17 14:41:47.132379 | input_ids:        torch.Size([312, 112])     Type:   torch.LongTensor
+2022-12-17 14:41:47.132411 | attention_mask:   torch.Size([312, 112])     Type:   torch.LongTensor
+2022-12-17 14:41:47.132426 | labels:           torch.Size([312, 112])     Type:   torch.LongTensor
+2022-12-17 14:41:47.134028 | Num of minibatches: 20
+2022-12-17 14:41:47.134077 | Minibatch shape:    torch.Size([3, 16, 112])
+2022-12-17 14:41:47.134097 | Minibatch memory:   0.04 MB
+
+  0%|          | 0/20 [00:00<?, ?it/s]/truba/home/stenekeci/miniconda3/envs/protbert/lib/python3.8/site-packages/torch/nn/parallel/_functions.py:68: UserWarning: Was asked to gather along dimension 0, but all input tensors were scalars; will instead unsqueeze and return a vector.
+  warnings.warn('Was asked to gather along dimension 0, but all '
+100%|██████████| 20/20 [00:03<00:00,  5.94it/s]2022-12-17 14:41:50.503840 | Logits:   torch.Size([312, 112, 30])
+2022-12-17 14:41:50.503939 | Labels:   torch.Size([312, 112])
+2022-12-17 14:41:50.509904 | MLM Loss:        5.95196
+2022-12-17 14:41:50.509959 | Cross Entropy:   5.90622
+2022-12-17 14:41:50.509982 | Perplexity:      367.31403
+2022-12-17 14:41:50.510007 | Accuracy:        0.00000
+2022-12-17 14:41:50.510065 | Average MLM Loss:        6.22247
+2022-12-17 14:41:50.510088 | Average Cross Entropy:   6.20470
+2022-12-17 14:41:50.510107 | Average Perplexity:      517.28836
+2022-12-17 14:41:50.510128 | Average Accuracy:        0.00000
+2022-12-17 14:41:50.510150 | Inference batch 3 of 3...
+2022-12-17 14:41:50.510205 | Masking...
+
+100%|██████████| 2/2 [00:00<00:00, 2106.10it/s]2022-12-17 14:41:50.511607 | Tokenizing...
+
+100%|██████████| 216/216 [00:00<00:00, 726.63it/s]2022-12-17 14:41:50.809659 | input_ids:        torch.Size([216, 112])     Type:   torch.LongTensor
+2022-12-17 14:41:50.809690 | attention_mask:   torch.Size([216, 112])     Type:   torch.LongTensor
+2022-12-17 14:41:50.809705 | labels:           torch.Size([216, 112])     Type:   torch.LongTensor
+2022-12-17 14:41:50.811496 | Num of minibatches: 14
+2022-12-17 14:41:50.811548 | Minibatch shape:    torch.Size([3, 16, 112])
+2022-12-17 14:41:50.811568 | Minibatch memory:   0.04 MB
+
+  0%|          | 0/14 [00:00<?, ?it/s]/truba/home/stenekeci/miniconda3/envs/protbert/lib/python3.8/site-packages/torch/nn/parallel/_functions.py:68: UserWarning: Was asked to gather along dimension 0, but all input tensors were scalars; will instead unsqueeze and return a vector.
+  warnings.warn('Was asked to gather along dimension 0, but all '
+100%|██████████| 14/14 [00:02<00:00,  5.86it/s]2022-12-17 14:41:53.202997 | Logits:   torch.Size([216, 112, 30])
+2022-12-17 14:41:53.203036 | Labels:   torch.Size([216, 112])
+2022-12-17 14:41:53.204407 | MLM Loss:        5.76794
+2022-12-17 14:41:53.204446 | Cross Entropy:   5.77048
+2022-12-17 14:41:53.204461 | Perplexity:      320.69153
+2022-12-17 14:41:53.204479 | Accuracy:        0.00000
+2022-12-17 14:41:53.204520 | Average MLM Loss:        6.07096
+2022-12-17 14:41:53.204535 | Average Cross Entropy:   6.05996
+2022-12-17 14:41:53.204547 | Average Perplexity:      451.75608
+2022-12-17 14:41:53.204561 | Average Accuracy:        0.00000

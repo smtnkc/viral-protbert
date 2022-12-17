@@ -2,6 +2,7 @@ from utils import *
 from anndata import AnnData
 from transformers import BertConfig, BertForMaskedLM, BertTokenizer, BertForSequenceClassification
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import accuracy_score
@@ -33,8 +34,8 @@ def encode_for_classification(seqs, tokenizer):
         input_ids.append(tokenized_sent['input_ids'])
         attention_mask.append(tokenized_sent['attention_mask'])
 
-    input_ids = torch.squeeze(torch.stack(input_ids))
-    attention_mask = torch.squeeze(torch.stack(attention_mask))
+    input_ids = torch.cat(input_ids, dim=0)
+    attention_mask = torch.cat(attention_mask, dim=0)
 
     return input_ids, attention_mask
 
@@ -89,9 +90,9 @@ def encode_for_masked_lm(seqs, tokenizer, max_seq_len):
             labels.append(label) # [[-100 -100 -100 7 -100 -100]]
             pbar.update(1)
 
-    input_ids = torch.squeeze(torch.stack(input_ids))
-    attention_masks = torch.squeeze(torch.stack(attention_masks))
-    labels = torch.squeeze(torch.stack(labels))
+    input_ids = torch.cat(input_ids, dim=0)
+    attention_masks = torch.cat(attention_masks, dim=0)
+    labels = torch.cat(labels, dim=0)
 
     return input_ids, attention_masks, labels
 
@@ -206,7 +207,7 @@ def analyze_embedding(args, model, seqs, target, device, use_cache):
     plot_umap(adata_cov2, [ 'host', 'group', 'country' ], namespace='cov7')
 
 
-def get_batch_size_mb(batch):
+def get_batch_memory(batch):
     return (batch[0].nelement() * batch[0].element_size() + 
             batch[1].nelement() * batch[1].element_size() + 
             batch[2].nelement() * batch[2].element_size()) / 1024**2
@@ -214,12 +215,15 @@ def get_batch_size_mb(batch):
 
 def evaluate(seqs, tokenizer, model, device, max_seq_len, use_cache):
 
-    batches = get_batches_for_masked_lm(seqs, tokenizer, max_seq_len, batch_size=1, use_cache=use_cache)
+    batches = get_batches_for_masked_lm(seqs, tokenizer, max_seq_len, batch_size=args.minibatch_size, use_cache=use_cache)
     flat_preds, flat_labels, all_logits, all_labels = [], [], [], []
     total_loss = 0.0
 
     model.eval()
-    tprint('{} minibatches. Each {:.2f} MB'.format(len(batches), get_batch_size_mb(next(iter(batches)))))
+    batch0 = next(iter(batches))
+    tprint('Num of minibatches: {}'.format(len(batches)))
+    tprint('Minibatch shape:    {}'.format(torch.stack(batch0).shape))
+    tprint('Minibatch memory:   {:.2f} MB'.format(get_batch_memory(batch0)))
     for batch_cpu in tqdm(batches):
         batch_gpu = (t.to(device) for t in batch_cpu)
         input_ids_gpu, attention_mask, labels = batch_gpu
@@ -227,7 +231,7 @@ def evaluate(seqs, tokenizer, model, device, max_seq_len, use_cache):
             outputs = model(input_ids=input_ids_gpu, attention_mask=attention_mask, labels=labels)
             all_logits.append(outputs.logits.cpu())
             all_labels.append(labels.cpu())
-            total_loss += outputs.loss.item()
+            total_loss += outputs.loss.mean().item()
 
             # To calculate accuracy
             mask_token_index = (input_ids_gpu == tokenizer.mask_token_id)[0].nonzero(as_tuple=True)[0].item()      
@@ -236,8 +240,8 @@ def evaluate(seqs, tokenizer, model, device, max_seq_len, use_cache):
             flat_preds.append(predicted_token_id)
             flat_labels.append(true_token_id)
 
-    all_logits = torch.squeeze(torch.stack(all_logits))
-    all_labels = torch.squeeze(torch.stack(all_labels))
+    all_logits = torch.cat(all_logits, dim=0)
+    all_labels = torch.cat(all_labels, dim=0)
 
     tprint('Logits:   {}'.format(all_logits.size()))
     tprint('Labels:   {}'.format(all_labels.size()))
@@ -259,9 +263,10 @@ def evaluate(seqs, tokenizer, model, device, max_seq_len, use_cache):
 if __name__ == '__main__':
 
     args = parse_args()
-    seqs, max_seq_len = read_seqs()
-    # seqs = generate_dummy_seqs() # 20 random seqs with length [100, 110) just for testing
-    # seqs = random_sample_seqs(seqs, p=1) # random sampling p% of the sequences just for testing
+    if args.dummy > 0:
+        seqs, max_seq_len = generate_dummy_seqs(n = args.dummy) # n random seqs with length [100, 110) just for testing
+    else:
+        seqs, max_seq_len = read_seqs()
 
     if args.embed:
         labels, unique_labels = get_labels(seqs, 'group')
@@ -272,20 +277,24 @@ if __name__ == '__main__':
 
     if args.inference_batch_size > 0:
         test_seqs_batches = batch_seqs(test_seqs, inference_batch_size=args.inference_batch_size) # test on batches of sequences to save memory
-        tprint('Batch lengths of test seqs: {}'.format([len(batch) for batch in test_seqs_batches]))
+        tprint('Minibatch lengths: {}'.format([len(batch) for batch in test_seqs_batches]))
 
     tokenizer = BertTokenizer.from_pretrained("Rostlab/prot_bert", do_lower_case=False)
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    tprint('Running on {}'.format(device))
+    tprint('Running on {}. Detected {} GPUs.'.format(device, torch.cuda.device_count()))
 
     if args.embed:
         config = BertConfig.from_pretrained("Rostlab/prot_bert", output_hidden_states=True, num_labels=len(unique_labels))
         model = BertForSequenceClassification.from_pretrained("Rostlab/prot_bert", config=config)
+        if torch.cuda.device_count() > 1:
+            model = nn.DataParallel(model)
         model.to(device)
         analyze_embedding(args, model, seqs, target='group', device=device, use_cache=args.use_cache)
 
     if args.test:
         model = BertForMaskedLM.from_pretrained("Rostlab/prot_bert")
+        if torch.cuda.device_count() > 1:
+            model = nn.DataParallel(model)
         model.to(device)
 
         if args.inference_batch_size > 0:

@@ -51,18 +51,18 @@ def parse_args():
     import argparse
     parser = argparse.ArgumentParser(description='Coronavirus sequence analysis')
 
-    parser.add_argument('--n-epochs', type=int, default=4,
+    parser.add_argument('--epochs', type=int, default=4,
                         help='Number of training epochs')
     parser.add_argument('--seed', type=int, default=1,
                         help='Random seed')
-    parser.add_argument('--minibatch_size', type=int, default=24,
+    parser.add_argument('--minibatch_size', type=int, default=128,
                         help='Batch size for the tokenizer and model.')
     parser.add_argument('--train', action='store_true',
                         help='Train model')
     parser.add_argument('--test', action='store_true',
                         help='Test model')
-    parser.add_argument('--inference_batch_size', type=int, default=38,
-                        help='Batch size for test run. Set 0 to disable batching.')
+    parser.add_argument('--batch_size', type=int, default=0,
+                        help='Batch size for run. Set 0 to disable batching.')
     parser.add_argument('--embed', action='store_true',
                         help='Analyze embeddings')
     parser.add_argument('--use_cache', action='store_true',
@@ -205,15 +205,15 @@ def random_sample_seqs(seqs, p=1):
 
     return sample_seqs
 
-def batch_seqs(seqs, inference_batch_size=76):
+def batch_seqs(seqs, batch_size=76):
 
-    n_batches = len(seqs) // inference_batch_size
-    if len(seqs) % inference_batch_size > 0:
+    n_batches = len(seqs) // batch_size
+    if len(seqs) % batch_size > 0:
         n_batches += 1
     batches = [{} for _ in range(n_batches)]
 
     for idx, seq in enumerate(seqs):
-        batch_id = idx // inference_batch_size
+        batch_id = idx // batch_size
         if batch_id == n_batches:
             batch_id = n_batches - 1
         batches[batch_id][seq] = seqs[seq]

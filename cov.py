@@ -6,6 +6,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import accuracy_score
+from transformers import AdamW
+from transformers import get_scheduler
 
 def get_labels(seqs, target):
     labels = []
@@ -213,6 +215,66 @@ def get_batch_memory(batch):
             batch[2].nelement() * batch[2].element_size()) / 1024**2
 
 
+def train(seqs, tokenizer, model, device, max_seq_len, optimizer, batch_id, use_cache):
+
+    batches = get_batches_for_masked_lm(seqs, tokenizer, max_seq_len, batch_size=args.minibatch_size, use_cache=use_cache)
+
+    batch0 = next(iter(batches))
+    tprint('Num of minibatches: {}'.format(len(batches)))
+    tprint('Minibatch shape:    {}'.format(torch.stack(batch0).shape))
+    tprint('Minibatch memory:   {:.2f} MB'.format(get_batch_memory(batch0)))
+
+    n_steps = args.epochs * len(batches)
+    lr_scheduler = get_scheduler(name="linear", optimizer=optimizer, num_warmup_steps=0, num_training_steps=n_steps)
+    model.train()
+
+    for epoch in range(1, args.epochs+1):
+        flat_preds, flat_labels, epoch_logits, epoch_labels = [], [], [], []
+        total_loss = 0.0
+        tprint('Epoch: {}'.format(epoch))
+        for batch_cpu in tqdm(batches):
+            batch_gpu = (t.to(device) for t in batch_cpu)
+            input_ids_gpu, attention_mask, labels = batch_gpu
+
+            outputs = model(input_ids=input_ids_gpu, attention_mask=attention_mask, labels=labels)
+            epoch_logits.append(outputs.logits.cpu())
+            epoch_labels.append(labels.cpu())
+            total_loss += outputs.loss.mean().item()
+
+            # To calculate accuracy
+            mask_token_index = (input_ids_gpu == tokenizer.mask_token_id)[0].nonzero(as_tuple=True)[0].item()
+            predicted_token_id = outputs.logits[0, mask_token_index].argmax(axis=-1).item()
+            true_token_id = labels[0, mask_token_index].item()
+            flat_preds.append(predicted_token_id)
+            flat_labels.append(true_token_id)
+
+            outputs.loss.backward()
+            optimizer.step()
+            lr_scheduler.step()
+            optimizer.zero_grad()
+
+        epoch_logits = torch.cat(epoch_logits, dim=0)
+        epoch_labels = torch.cat(epoch_labels, dim=0)
+
+        tprint('Logits:   {}'.format(epoch_logits.size()))
+        tprint('Labels:   {}'.format(epoch_labels.size()))
+
+        cre = F.cross_entropy(epoch_logits.view(-1, tokenizer.vocab_size), epoch_labels.view(-1))
+        perplexity = torch.exp(cre).item()
+        cre = cre.item()
+        mlm = total_loss/len(batches)
+        acc = accuracy_score(flat_labels, flat_preds)
+
+        tprint("MLM Loss:        {:.5f}".format(mlm))
+        tprint("Cross Entropy:   {:.5f}".format(cre))
+        tprint("Perplexity:      {:.5f}".format(perplexity))
+        tprint("Accuracy:        {:.5f}".format(acc))
+
+        torch.save(model.state_dict(), 'models/checkpoint_{}.pt'.format(args.model, args.dataset, batch_id*epoch))
+
+    return mlm, cre, perplexity, acc
+
+
 def evaluate(seqs, tokenizer, model, device, max_seq_len, use_cache):
 
     batches = get_batches_for_masked_lm(seqs, tokenizer, max_seq_len, batch_size=args.minibatch_size, use_cache=use_cache)
@@ -234,7 +296,7 @@ def evaluate(seqs, tokenizer, model, device, max_seq_len, use_cache):
             total_loss += outputs.loss.mean().item()
 
             # To calculate accuracy
-            mask_token_index = (input_ids_gpu == tokenizer.mask_token_id)[0].nonzero(as_tuple=True)[0].item()      
+            mask_token_index = (input_ids_gpu == tokenizer.mask_token_id)[0].nonzero(as_tuple=True)[0].item()
             predicted_token_id = outputs.logits[0, mask_token_index].argmax(axis=-1).item()
             true_token_id = labels[0, mask_token_index].item()
             flat_preds.append(predicted_token_id)
@@ -275,38 +337,45 @@ if __name__ == '__main__':
     train_seqs, test_seqs = split_seqs(seqs)
     tprint('{} train seqs, {} test seqs.'.format(len(train_seqs), len(test_seqs)))
 
-    if args.inference_batch_size > 0:
-        test_seqs_batches = batch_seqs(test_seqs, inference_batch_size=args.inference_batch_size) # test on batches of sequences to save memory
-        tprint('Minibatch lengths: {}'.format([len(batch) for batch in test_seqs_batches]))
-
-    tokenizer = BertTokenizer.from_pretrained("Rostlab/prot_bert", do_lower_case=False)
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     tprint('Running on {}. Detected {} GPUs.'.format(device, torch.cuda.device_count()))
+
+    if args.train:
+        seqs = train_seqs
+    elif args.test:
+        seqs = test_seqs
 
     if args.embed:
         config = BertConfig.from_pretrained("Rostlab/prot_bert", output_hidden_states=True, num_labels=len(unique_labels))
         model = BertForSequenceClassification.from_pretrained("Rostlab/prot_bert", config=config)
-        if torch.cuda.device_count() > 1:
-            model = nn.DataParallel(model)
-        model.to(device)
         analyze_embedding(args, model, seqs, target='group', device=device, use_cache=args.use_cache)
-
-    if args.test:
+    else:
+        tokenizer = BertTokenizer.from_pretrained("Rostlab/prot_bert", do_lower_case=False)
         model = BertForMaskedLM.from_pretrained("Rostlab/prot_bert")
-        if torch.cuda.device_count() > 1:
-            model = nn.DataParallel(model)
-        model.to(device)
+        optimizer = AdamW(model.parameters(), lr=1e-5)
 
-        if args.inference_batch_size > 0:
-            total_mlm, total_cre, total_perplexity, total_acc = 0.0, 0.0, 0.0, 0.0
-            for batch_id, test_seqs_batch in enumerate(test_seqs_batches):
-                tprint('Inference batch {} of {}...'.format(batch_id+1, len(test_seqs_batches)))
-                mlm, cre, perplexity, acc = evaluate(test_seqs_batch, tokenizer, model, device, max_seq_len, use_cache=args.use_cache)
+    if torch.cuda.device_count() > 1:
+        model = nn.DataParallel(model)
+    model.to(device)
+
+    if args.batch_size > 0:
+        batches = batch_seqs(seqs, batch_size=args.batch_size) # run on batches of sequences to save memory
+        tprint('Batch lengths: {}'.format([len(batch) for batch in batches]))
+        total_mlm, total_cre, total_perplexity, total_acc = 0.0, 0.0, 0.0, 0.0
+        for batch_id, batch in enumerate(batches):
+            tprint('Batch {} of {}...'.format(batch_id+1, len(batches)))
+            if args.train:
+                if batch_id > 0:
+                    tprint('Loading models/checkpoint_{}.pt to continue training on...'.format(batch_id * args.epochs))
+                    model.load_state_dict(torch.load('models/checkpoint_{}.pt'.format(batch_id * args.epochs)))
+                mlm, cre, perplexity, acc = train(batch, tokenizer, model, device, max_seq_len, optimizer, batch_id+1, use_cache=args.use_cache)
+            elif args.test:
+                mlm, cre, perplexity, acc = evaluate(batch, tokenizer, model, device, max_seq_len, use_cache=args.use_cache)
                 total_mlm += mlm
                 total_cre += cre
                 total_perplexity += perplexity
                 total_acc += acc
-        
+
                 avg_mlm = total_mlm/(batch_id+1)
                 avg_cre = total_cre/(batch_id+1)
                 avg_perplexity = total_perplexity/(batch_id+1)
@@ -315,5 +384,8 @@ if __name__ == '__main__':
                 tprint('Average Cross Entropy:   {:.5f}'.format(avg_cre))
                 tprint('Average Perplexity:      {:.5f}'.format(avg_perplexity))
                 tprint('Average Accuracy:        {:.5f}'.format(avg_acc))
-        else:
-            mlm, cre, perplexity, acc = evaluate(test_seqs, tokenizer, model, device, max_seq_len, use_cache=args.use_cache)
+    else:
+        if args.train:
+            mlm, cre, perplexity, acc = train(seqs, tokenizer, model, device, max_seq_len, optimizer, batch_id=1, use_cache=args.use_cache)
+        elif args.test:
+            mlm, cre, perplexity, acc = evaluate(seqs, tokenizer, model, device, max_seq_len, use_cache=args.use_cache)

@@ -1,6 +1,6 @@
 from utils import *
 from anndata import AnnData
-from transformers import BertConfig, BertForMaskedLM, BertTokenizer, BertForSequenceClassification
+from transformers import BertConfig, BertForMaskedLM, AutoTokenizer, BertForSequenceClassification
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -42,7 +42,7 @@ def encode_for_classification(seqs, tokenizer):
     return input_ids, attention_mask
 
 
-def get_batches_for_classification(seqs, target, tokenizer, batch_size):
+def get_batches_for_classification(seqs, target, tokenizer, args):
 
     input_ids, attention_mask = encode_for_classification(seqs, tokenizer)
 
@@ -51,7 +51,7 @@ def get_batches_for_classification(seqs, target, tokenizer, batch_size):
     y = torch.tensor(list(indices), dtype=torch.long) # list to tensor
 
     tensor_dataset = TensorDataset(input_ids, attention_mask, y)
-    tensor_dataloader = DataLoader(tensor_dataset, batch_size=batch_size, shuffle=False)
+    tensor_dataloader = DataLoader(tensor_dataset, batch_size=args.minibatch_size, shuffle=False)
     return tensor_dataloader
 
 
@@ -68,7 +68,7 @@ def encode_for_masked_lm(seqs, tokenizer, max_seq_len):
     tprint('Masking...')
     for s in tqdm(sents):
         words = s.split()
-        for i in range(len(words)):
+        for i in range(0, len(words), int(1/args.masking_prob)):
             sent_pre = words[:i]
             sent_post = words[i+1:]
             masked_sent = sent_pre + [tokenizer.mask_token] + sent_post
@@ -99,19 +99,19 @@ def encode_for_masked_lm(seqs, tokenizer, max_seq_len):
     return input_ids, attention_masks, labels
 
 
-def get_batches_for_masked_lm(seqs, tokenizer, max_seq_len, batch_size, use_cache=True):
+def get_batches_for_masked_lm(seqs, tokenizer, max_seq_len, args):
 
     fnames = ['cache/input_ids.pt', 'cache/attention_mask.pt', 'cache/labels.pt']
 
-    if use_cache and (os.path.exists(fnames[0]) and 
+    if args.use_cache and (os.path.exists(fnames[0]) and
         os.path.exists(fnames[1]) and os.path.exists(fnames[2])):
         tprint('Loading input_ids, attention_mask, and labels...')
         input_ids = torch.load(fnames[0])
         attention_mask = torch.load(fnames[1])
         labels = torch.load(fnames[2])
-    else:    
+    else:
         input_ids, attention_mask, labels = encode_for_masked_lm(seqs, tokenizer, max_seq_len)
-        if use_cache:
+        if args.use_cache:
             mkdir_p('cache')
             tprint('Saving input_ids, attention_mask, and labels...')
             torch.save(input_ids, fnames[0])
@@ -123,34 +123,33 @@ def get_batches_for_masked_lm(seqs, tokenizer, max_seq_len, batch_size, use_cach
     tprint('labels:           {}     Type:   {}'.format(labels.size(), labels.type()))
 
     tensor_dataset = TensorDataset(input_ids, attention_mask, labels)
-    tensor_dataloader = DataLoader(tensor_dataset, batch_size=batch_size, shuffle=False)
+    tensor_dataloader = DataLoader(tensor_dataset, batch_size=args.minibatch_size, shuffle=False)
     return tensor_dataloader
 
 
-def embed_seqs(args, model, seqs, target, device, use_cache=True):
+def embed_seqs(model, seqs, target, device, args):
 
     embed_fname = 'cache/embeddings.npy'
 
-    if use_cache and os.path.exists(embed_fname):
+    if args.use_cache and os.path.exists(embed_fname):
         mkdir_p('cache')
         tprint('Loading X_embed.npy')
         X_embed = np.load(embed_fname, allow_pickle=True)
     else:
         model.eval()
-        batches = get_batches_for_classification(seqs, target, tokenizer,
-                    batch_size=args.batch_size, use_cache=use_cache)
+        batches = get_batches_for_classification(seqs, target, tokenizer, args)
 
         X_embed = []
         for batch_id, batch_cpu in enumerate(batches):
-            tprint('{}/{}'.format(batch_id*args.batch_size, len(seqs)))
+            tprint('{}/{}'.format(batch_id*args.minibatch_size, len(seqs)))
             input_ids, attention_mask, labels = (t.to(device) for t in batch_cpu)
             with torch.no_grad():
                 outputs = model(input_ids=input_ids, attention_mask=attention_mask)
                 hidden_states = outputs.hidden_states
 
-                # Extract the embeddings (vector representations) from 
+                # Extract the embeddings (vector representations) from
                 # the last hidden state as suggested in ProtBert paper:
-                token_embeddings = hidden_states[-1][0] 
+                token_embeddings = hidden_states[-1][0]
 
                 tprint(token_embeddings.size())
 
@@ -158,7 +157,7 @@ def embed_seqs(args, model, seqs, target, device, use_cache=True):
                 token_embeddings = token_embeddings.detach().cpu().numpy() 
                 X_embed.append(token_embeddings)
 
-        if use_cache:
+        if args.use_cache:
             mkdir_p('cache')
             tprint('Saving X_embed.npy')
             np.save(embed_fname, X_embed)
@@ -170,9 +169,9 @@ def embed_seqs(args, model, seqs, target, device, use_cache=True):
     return seqs
 
 
-def analyze_embedding(args, model, seqs, target, device, use_cache):
+def analyze_embedding(model, seqs, target, device, args):
 
-    seqs = embed_seqs(args, model, seqs, target, device, use_cache)
+    seqs = embed_seqs(model, seqs, target, device, args)
 
     X, obs = [], {}
     obs['n_seq'] = []
@@ -210,14 +209,14 @@ def analyze_embedding(args, model, seqs, target, device, use_cache):
 
 
 def get_batch_memory(batch):
-    return (batch[0].nelement() * batch[0].element_size() + 
-            batch[1].nelement() * batch[1].element_size() + 
+    return (batch[0].nelement() * batch[0].element_size() +
+            batch[1].nelement() * batch[1].element_size() +
             batch[2].nelement() * batch[2].element_size()) / 1024**2
 
 
-def train(seqs, tokenizer, model, device, max_seq_len, optimizer, batch_id, use_cache):
+def train(seqs, tokenizer, model, device, max_seq_len, optimizer, batch_id, args):
 
-    batches = get_batches_for_masked_lm(seqs, tokenizer, max_seq_len, batch_size=args.minibatch_size, use_cache=use_cache)
+    batches = get_batches_for_masked_lm(seqs, tokenizer, max_seq_len, args)
 
     batch0 = next(iter(batches))
     tprint('Num of minibatches: {}'.format(len(batches)))
@@ -248,7 +247,7 @@ def train(seqs, tokenizer, model, device, max_seq_len, optimizer, batch_id, use_
             flat_preds.append(predicted_token_id)
             flat_labels.append(true_token_id)
 
-            outputs.loss.backward()
+            outputs.loss.mean().backward()
             optimizer.step()
             lr_scheduler.step()
             optimizer.zero_grad()
@@ -270,14 +269,21 @@ def train(seqs, tokenizer, model, device, max_seq_len, optimizer, batch_id, use_
         tprint("Perplexity:      {:.5f}".format(perplexity))
         tprint("Accuracy:        {:.5f}".format(acc))
 
-        torch.save(model.state_dict(), 'models/checkpoint_{}.pt'.format(args.model, args.dataset, batch_id*epoch))
+        torch.save({
+            'epoch': batch_id*epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'acc': acc,
+            'perplexity': perplexity,
+            'cre': cre
+            }, 'models/checkpoint_{}.pt'.format(batch_id*epoch))
 
     return mlm, cre, perplexity, acc
 
 
-def evaluate(seqs, tokenizer, model, device, max_seq_len, use_cache):
+def evaluate(seqs, tokenizer, model, device, max_seq_len, args):
 
-    batches = get_batches_for_masked_lm(seqs, tokenizer, max_seq_len, batch_size=args.minibatch_size, use_cache=use_cache)
+    batches = get_batches_for_masked_lm(seqs, tokenizer, max_seq_len, args)
     flat_preds, flat_labels, all_logits, all_labels = [], [], [], []
     total_loss = 0.0
 
@@ -348,9 +354,9 @@ if __name__ == '__main__':
     if args.embed:
         config = BertConfig.from_pretrained("Rostlab/prot_bert", output_hidden_states=True, num_labels=len(unique_labels))
         model = BertForSequenceClassification.from_pretrained("Rostlab/prot_bert", config=config)
-        analyze_embedding(args, model, seqs, target='group', device=device, use_cache=args.use_cache)
+        analyze_embedding(model, seqs, 'group', device, args)
     else:
-        tokenizer = BertTokenizer.from_pretrained("Rostlab/prot_bert", do_lower_case=False)
+        tokenizer = AutoTokenizer.from_pretrained("Rostlab/prot_bert", do_lower_case=False)
         model = BertForMaskedLM.from_pretrained("Rostlab/prot_bert")
         optimizer = AdamW(model.parameters(), lr=1e-5)
 
@@ -367,10 +373,21 @@ if __name__ == '__main__':
             if args.train:
                 if batch_id > 0:
                     tprint('Loading models/checkpoint_{}.pt to continue training on...'.format(batch_id * args.epochs))
-                    model.load_state_dict(torch.load('models/checkpoint_{}.pt'.format(batch_id * args.epochs)))
-                mlm, cre, perplexity, acc = train(batch, tokenizer, model, device, max_seq_len, optimizer, batch_id+1, use_cache=args.use_cache)
+                    checkpoint = torch.load('models/checkpoint_{}.pt'.format(batch_id * args.epochs))
+                    model.load_state_dict(checkpoint['model_state_dict'])
+                    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                    epoch = checkpoint['epoch']
+                    acc = checkpoint['acc']
+                    perplexity = checkpoint['perplexity']
+                    cre = checkpoint['cre']
+                    tprint('Loaded model epoch={}, acc={}, perplexity={}, cre={}'.format(epoch, acc, perplexity, cre))
+                mlm, cre, perplexity, acc = train(batch, tokenizer, model, device, max_seq_len, optimizer, batch_id+1, args)
             elif args.test:
-                mlm, cre, perplexity, acc = evaluate(batch, tokenizer, model, device, max_seq_len, use_cache=args.use_cache)
+                if args.checkpoint != None and os.path.exists(args.checkpoint):
+                    tprint('Loading {} to test on...'.format(args.checkpoint))
+                    checkpoint = torch.load(args.checkpoint)
+                    model.load_state_dict(checkpoint['model_state_dict'])
+                mlm, cre, perplexity, acc = evaluate(batch, tokenizer, model, device, max_seq_len, args)
                 total_mlm += mlm
                 total_cre += cre
                 total_perplexity += perplexity
@@ -386,6 +403,22 @@ if __name__ == '__main__':
                 tprint('Average Accuracy:        {:.5f}'.format(avg_acc))
     else:
         if args.train:
-            mlm, cre, perplexity, acc = train(seqs, tokenizer, model, device, max_seq_len, optimizer, batch_id=1, use_cache=args.use_cache)
+            batch_id = 1
+            if args.checkpoint != None and os.path.exists(args.checkpoint):
+                tprint('Loading {} to continue training on...'.format(args.checkpoint))
+                checkpoint = torch.load(args.checkpoint)
+                model.load_state_dict(checkpoint['model_state_dict'])
+                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                epoch = checkpoint['epoch']
+                acc = checkpoint['acc']
+                perplexity = checkpoint['perplexity']
+                cre = checkpoint['cre']
+                tprint('Loaded model epoch={}, acc={}, perplexity={}, cre={}'.format(epoch, acc, perplexity, cre))
+                batch_id = epoch + 1
+            mlm, cre, perplexity, acc = train(seqs, tokenizer, model, device, max_seq_len, optimizer, batch_id, args)
         elif args.test:
-            mlm, cre, perplexity, acc = evaluate(seqs, tokenizer, model, device, max_seq_len, use_cache=args.use_cache)
+            if args.checkpoint != None and os.path.exists(args.checkpoint):
+                    tprint('Loading {} to test on...'.format(args.checkpoint))
+                    checkpoint = torch.load(args.checkpoint)
+                    model.load_state_dict(checkpoint['model_state_dict'])
+            mlm, cre, perplexity, acc = evaluate(seqs, tokenizer, model, device, max_seq_len, args)

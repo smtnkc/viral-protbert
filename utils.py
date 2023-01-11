@@ -59,6 +59,8 @@ def parse_args():
                         help='Batch size for the tokenizer and model.')
     parser.add_argument('--train', action='store_true',
                         help='Train model')
+    parser.add_argument('--masking_prob', type=float, default=1,
+                        help='Masking probability')
     parser.add_argument('--test', action='store_true',
                         help='Test model')
     parser.add_argument('--batch_size', type=int, default=0,
@@ -69,6 +71,8 @@ def parse_args():
                         help='Use cached data')
     parser.add_argument('--dummy', type=int, default=0,
                         help='Use n random seqs with length [100, 110). Set 0 to disable.')
+    parser.add_argument('--checkpoint', type=str, default=None,
+                        help='Checkpoint to load')
 
     args = parser.parse_args()
     return args
